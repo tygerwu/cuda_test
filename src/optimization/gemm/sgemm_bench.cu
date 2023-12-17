@@ -2,11 +2,11 @@
 #include "gflags/gflags.h"
 #include "naive.cuh"
 #include "sgemm.cuh"
-#include "sgemm_cublas.cuh"
 #include "sgemm_v3.cuh"
 #include "utils.cuh"
 #include "utils.h"
 #include "gtest/gtest.h"
+#include <cublas_v2.h>
 
 using FloatVector = std::vector<float>;
 
@@ -18,15 +18,21 @@ class CUSgemmBench : public ::testing::Test {
 public:
   void Verify(SGemmFunc func) {
     loops = 1;
-    Bench(func, true);
+    BenchFunc(func, true);
   }
-  double Bench(SGemmFunc func, bool verify = false) {
+  void BenchBlas() { BenchFunc(nullptr, false, true); }
+  double Bench(SGemmFunc func) { return BenchFunc(func, false, false); }
+
+protected:
+  double BenchFunc(SGemmFunc func, bool verify = false, bool blas = false) {
     int ASIZE = m * k, BSIZE = k * n, CSIZE = m * n;
     int ABYTES = ASIZE * sizeof(float);
     int BBYTES = BSIZE * sizeof(float);
     int CBYTES = CSIZE * sizeof(float);
 
     std::vector<float> times;
+    cublasHandle_t blas_handle;
+    CUBLAS_ERROR_CHECK(cublasCreate(&blas_handle));
     for (int i = 0; i < loops; i++) {
       // Allocate host memory
       FloatVector hA = CreateData<float>(ASIZE, 0, 4);
@@ -50,7 +56,18 @@ public:
       CUDA_ERROR_CHECK(cudaEventCreate(&stop));
 
       checkCudaErrors(cudaEventRecord(start));
-      func(dA, dB, dC, m, n, k);
+      if (blas) {
+        float alpha = 1.0;
+        float beta = 0;
+        cublasSgemm(blas_handle, CUBLAS_OP_N, CUBLAS_OP_N, n, m, k, &alpha, dB,
+                    n, dA, k, &beta, dC, n);
+        cudaError_t err = cudaGetLastError();
+        if (err != cudaSuccess) {
+          printf("CUDA Error: %s\n", cudaGetErrorString(err));
+        }
+      } else {
+        func(dA, dB, dC, m, n, k);
+      }
       CUDA_ERROR_CHECK(cudaEventRecord(stop));
       CUDA_ERROR_CHECK(cudaEventSynchronize(stop));
       CUDA_ERROR_CHECK(cudaEventElapsedTime(&time_ms, start, stop));
@@ -73,6 +90,7 @@ public:
 
       times.push_back(time_ms);
     }
+    cublasDestroy(blas_handle);
     double gflops = (double)2 * m * n * k / (Average(times) * 1e6);
     std::cout << "Average Time: " << Average(times) << " gflops:" << gflops
               << std::endl;
@@ -119,7 +137,7 @@ TEST_F(CUSgemmBench, v3) {
 }
 
 TEST_F(CUSgemmBench, v0) {
-  m = 256, n = 256, k = 16;
+  m = 4096, n = 4096, k = 4096;
 
   constexpr int WY = 4;
   constexpr int WX = 8;
@@ -133,7 +151,7 @@ TEST_F(CUSgemmBench, v0) {
   constexpr int MC = MR * BY;
   constexpr int NC = NR * BX;
 
-  constexpr int KC = 16;
+  constexpr int KC = 8;
 
   constexpr int BLOCK_SIZE_M = 128;
   constexpr int BLOCK_SIZE_K = 8;
@@ -142,11 +160,12 @@ TEST_F(CUSgemmBench, v0) {
   constexpr int THREAD_SIZE_Y = 8;
   constexpr bool ENABLE_DOUBLE_BUFFER = false;
 
-  Verify(SGemmV3<BLOCK_SIZE_M, BLOCK_SIZE_K, BLOCK_SIZE_N, THREAD_SIZE_X,
-                 THREAD_SIZE_Y, ENABLE_DOUBLE_BUFFER>);
+  loops = 12;
+  Bench(SGemmV3<BLOCK_SIZE_M, BLOCK_SIZE_K, BLOCK_SIZE_N, THREAD_SIZE_X,
+                THREAD_SIZE_Y, ENABLE_DOUBLE_BUFFER>);
 
-  Verify(CudaSGemm<MC, KC, NC, MR, NR, WY, WX>);
-  // Bench(CublasSgemm);
+  Bench(CudaSGemm<MC, KC, NC, MR, NR, WY, WX>);
+  BenchBlas();
 }
 
-TEST_F(CUGemmMNK, naive) { Bench(CublasSgemm); }
+// TEST_F(CUGemmMNK, naive) { Bench(CublasSgemm); }
