@@ -690,3 +690,7 @@ hs_err_pid*
 !*bits/android/proto/proto/*.pb.h
 
 playground
+
+
+*json
+vs_build*
