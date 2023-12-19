@@ -1,14 +1,17 @@
 
+#pragma once
 #include "utils.cuh"
 #include "utils.h"
 #include <cuda_runtime.h>
 
 #include <stdio.h>
+
 template <size_t MC, size_t KC, size_t NC, size_t MR, size_t NR, size_t WY,
           size_t WX>
-static __global__ void
-CudaSGemmImpl(const float *__restrict__ A, const float *__restrict__ B,
-              float *__restrict__ C, int M, int N, int K, int ldk, int ldn) {
+static __global__ void CudaSGemmRegBufferImpl(const float *__restrict__ A,
+                                              const float *__restrict__ B,
+                                              float *__restrict__ C, int M,
+                                              int N, int K, int ldk, int ldn) {
 
   static_assert(MR % 4 == 0, "Invalid MR");
   static_assert(NR % 4 == 0, "Invalid NR");
@@ -48,9 +51,36 @@ CudaSGemmImpl(const float *__restrict__ A, const float *__restrict__ B,
   __shared__ float b_macro_smem[B_MICRO_NUM * B_MICRO_SIZE];
 
   // Regs
-  float a_regs[MR];
-  float b_regs[NR];
+  float a_regs[2 * MR];
+  float b_regs[2 * NR];
   float c_acc_regs[MR * NR] = {0};
+
+  auto OuterProduct = [&a_regs, &b_regs, &c_acc_regs](int reg_buf_id) {
+
+#pragma unroll
+    for (int i = 0; i < MR; i++) {
+#pragma unroll
+      for (int j = 0; j < NR; j++) {
+        c_acc_regs[i * NR + j] +=
+            a_regs[reg_buf_id * MR + i] * b_regs[reg_buf_id * NR + j];
+      }
+    }
+  };
+  auto SMemToReg = [&a_regs, &b_regs, wid_x, wid_y, tid_x_in_w,
+                    tid_y_in_w](int reg_buf_id, int p) {
+#pragma unroll
+    for (int i = 0; i < NR; i += 4) {
+      *FP4_PTR(b_regs + reg_buf_id * NR + i) =
+          *CONST_FP4_PTR(b_macro_smem + wid_x * B_WARP_MICRO_SIZE +
+                         tid_x_in_w * B_MICRO_SIZE + p * NR + i);
+    }
+#pragma unroll
+    for (int i = 0; i < MR; i += 4) {
+      *FP4_PTR(a_regs + reg_buf_id * MR + i) =
+          *CONST_FP4_PTR(a_macro_smem + wid_y * A_WARP_MICRO_SIZE +
+                         tid_y_in_w * A_MICRO_SIZE + p * MR + i);
+    }
+  };
 
 #pragma unroll(2)
   for (size_t pc = 0; pc < K; pc += KC) {
@@ -102,35 +132,23 @@ CudaSGemmImpl(const float *__restrict__ A, const float *__restrict__ B,
     }
     __syncthreads();
 
+    // Prefetch
+    int st_buf_id = 0;
+    int ld_buf_id = 0;
+    SMemToReg(st_buf_id, 0);
+    st_buf_id ^= 1; // XOR
+
     // MicroKernel
 #pragma unroll
-    for (int p = 0; p < KC; p++) {
+    for (int p = 1; p < KC; p++) {
+      // Prefetch
+      SMemToReg(st_buf_id, p);
+      st_buf_id ^= 1;
 
-      // Load B from SMem to Regs
-#pragma unroll
-      for (int i = 0; i < NR; i += 4) {
-        *FP4_PTR(b_regs + i) =
-            *CONST_FP4_PTR(b_macro_smem + wid_x * B_WARP_MICRO_SIZE +
-                           tid_x_in_w * B_MICRO_SIZE + p * NR + i);
-      }
-
-      // Load A from SMem to Regs
-#pragma unroll
-      for (int i = 0; i < MR; i += 4) {
-        *FP4_PTR(a_regs + i) =
-            *CONST_FP4_PTR(a_macro_smem + wid_y * A_WARP_MICRO_SIZE +
-                           tid_y_in_w * A_MICRO_SIZE + p * MR + i);
-      }
-
-      // Compute
-#pragma unroll
-      for (int i = 0; i < MR; i++) {
-#pragma unroll
-        for (int j = 0; j < NR; j++) {
-          c_acc_regs[i * NR + j] += a_regs[i] * b_regs[j];
-        }
-      }
+      OuterProduct(ld_buf_id);
+      ld_buf_id ^= 1;
     }
+    OuterProduct(ld_buf_id);
   }
 
   // Store C
@@ -149,10 +167,10 @@ CudaSGemmImpl(const float *__restrict__ A, const float *__restrict__ B,
 
 template <size_t MC, size_t KC, size_t NC, size_t MR, size_t NR, size_t WY,
           size_t WX>
-static void CudaSGemm(const float *A, const float *B, float *C, int M, int N,
-                      int K) {
+static void CudaSGemmRegBuffer(const float *A, const float *B, float *C, int M,
+                               int N, int K) {
   dim3 dimBlock(NC / NR, MC / MR);
   dim3 dimGrid(N / NC, M / MC);
-  CudaSGemmImpl<MC, KC, NC, MR, NR, WY, WX>
+  CudaSGemmRegBufferImpl<MC, KC, NC, MR, NR, WY, WX>
       <<<dimGrid, dimBlock>>>(A, B, C, M, N, K, K, N);
 }

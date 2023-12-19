@@ -1,4 +1,5 @@
 
+#pragma once
 #include "utils.cuh"
 #include "utils.h"
 #include <cuda_runtime.h>
@@ -39,20 +40,20 @@ CudaSGemmDoubleBufferImpl(const float *__restrict__ A,
   constexpr size_t A_MICRO_SIZE = UP_ROUND(MR * KC, 32) + A_PAD;
   constexpr size_t A_WARP_MICRO_SIZE = WY * A_MICRO_SIZE;
   constexpr size_t A_MICRO_NUM = MC / MR;
-  constexpr size_t A_MACRO_SMEM_SIZE = A_MICRO_NUM * A_MICRO_SIZE;
+  constexpr size_t A_MACRO_SMEM_SIZE = A_MICRO_NUM * A_MICRO_SIZE + 4;
 
   constexpr size_t B_PAD = 4;
   constexpr size_t B_MICRO_SIZE = UP_ROUND(KC * NR, 32) + B_PAD;
   constexpr size_t B_WARP_MICRO_SIZE = WX * B_MICRO_SIZE;
   constexpr size_t B_MICRO_NUM = NC / NR;
-  constexpr size_t B_MACRO_SMEM_SIZE = B_MICRO_NUM * B_MICRO_SIZE;
+  constexpr size_t B_MACRO_SMEM_SIZE = B_MICRO_NUM * B_MICRO_SIZE + 4;
 
   __shared__ float a_macro_smem[2 * A_MACRO_SMEM_SIZE];
   __shared__ float b_macro_smem[2 * B_MACRO_SMEM_SIZE];
 
   // Regs
-  float a_regs[2 * MR];
-  float b_regs[2 * NR];
+  float a_regs[MR];
+  float b_regs[NR];
   float c_acc_regs[MR * NR] = {0};
 
   constexpr size_t B_MACRO_F4_NUM = KC * NC / 4;
@@ -111,13 +112,13 @@ CudaSGemmDoubleBufferImpl(const float *__restrict__ A,
     for (int p = 0; p < KC; p++) {
 #pragma unroll
       for (int i = 0; i < NR; i += 4) {
-        *FP4_PTR(b_regs + buf_id * NR + i) = *CONST_FP4_PTR(
+        *FP4_PTR(b_regs + i) = *CONST_FP4_PTR(
             b_macro_smem + buf_id * B_MACRO_SMEM_SIZE +
             wid_x * B_WARP_MICRO_SIZE + tid_x_in_w * B_MICRO_SIZE + p * NR + i);
       }
 #pragma unroll
       for (int i = 0; i < MR; i += 4) {
-        *FP4_PTR(a_regs + buf_id * MR + i) = *CONST_FP4_PTR(
+        *FP4_PTR(a_regs + i) = *CONST_FP4_PTR(
             a_macro_smem + buf_id * A_MACRO_SMEM_SIZE +
             wid_y * A_WARP_MICRO_SIZE + tid_y_in_w * A_MICRO_SIZE + p * MR + i);
       }
@@ -125,31 +126,30 @@ CudaSGemmDoubleBufferImpl(const float *__restrict__ A,
       for (int i = 0; i < MR; i++) {
 #pragma unroll
         for (int j = 0; j < NR; j++) {
-          c_acc_regs[i * NR + j] +=
-              a_regs[buf_id * MR + i] * b_regs[buf_id * NR + j];
+          c_acc_regs[i * NR + j] += a_regs[i] * b_regs[j];
         }
       }
     }
   };
   LoadFromGMem(0, 0);
-  __syncthreads();
   int pk = KC;
   for (; pk < K;) {
     if (pk + KC <= K) {
+      __syncthreads();
       LoadFromGMem(1, pk);
       MicroKernel(0);
       pk += KC;
     }
 
     if (pk + KC <= K) {
-      LoadFromGMem(0, pk);
       __syncthreads();
+      LoadFromGMem(0, pk);
       MicroKernel(1);
       pk += KC;
     }
   }
+  __syncthreads();
   if ((K / KC) % 2 == 0) {
-    __syncthreads();
     MicroKernel(1);
   } else {
     MicroKernel(0);

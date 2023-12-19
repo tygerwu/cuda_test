@@ -2,6 +2,8 @@
 #include "gflags/gflags.h"
 #include "naive.cuh"
 #include "sgemm.cuh"
+#include "sgemm_buffer.cuh"
+#include "sgemm_reg_buffer.cuh"
 #include "sgemm_v3.cuh"
 #include "utils.cuh"
 #include "utils.h"
@@ -35,8 +37,8 @@ protected:
     CUBLAS_ERROR_CHECK(cublasCreate(&blas_handle));
     for (int i = 0; i < loops; i++) {
       // Allocate host memory
-      FloatVector hA = CreateData<float>(ASIZE, 0, 4);
-      FloatVector hB = CreateData<float>(BSIZE, 0, 4);
+      FloatVector hA = CreateData<float>(ASIZE, 0, 6);
+      FloatVector hB = CreateData<float>(BSIZE, 0, 6);
       FloatVector hC(CSIZE, 0);
 
       // Allocate device memory
@@ -137,7 +139,7 @@ TEST_F(CUSgemmBench, v3) {
 }
 
 TEST_F(CUSgemmBench, v0) {
-  m = 4096, n = 4096, k = 4096;
+  m = 1024, n = 4096, k = 4096;
 
   constexpr int WY = 4;
   constexpr int WX = 8;
@@ -151,7 +153,7 @@ TEST_F(CUSgemmBench, v0) {
   constexpr int MC = MR * BY;
   constexpr int NC = NR * BX;
 
-  constexpr int KC = 8;
+  constexpr int KC = 16;
 
   constexpr int BLOCK_SIZE_M = 128;
   constexpr int BLOCK_SIZE_K = 8;
@@ -160,12 +162,14 @@ TEST_F(CUSgemmBench, v0) {
   constexpr int THREAD_SIZE_Y = 8;
   constexpr bool ENABLE_DOUBLE_BUFFER = false;
 
-  loops = 12;
-  Bench(SGemmV3<BLOCK_SIZE_M, BLOCK_SIZE_K, BLOCK_SIZE_N, THREAD_SIZE_X,
-                THREAD_SIZE_Y, ENABLE_DOUBLE_BUFFER>);
-
+  loops = 1;
   Bench(CudaSGemm<MC, KC, NC, MR, NR, WY, WX>);
-  BenchBlas();
+  // Bench(SGemmV3<BLOCK_SIZE_M, BLOCK_SIZE_K, BLOCK_SIZE_N, THREAD_SIZE_X,
+  //               THREAD_SIZE_Y, ENABLE_DOUBLE_BUFFER>);
+
+  // Bench(CudaSGemmRegBuffer<MC, KC, NC, MR, NR, WY, WX>);
+  Bench(CudaSGemmDoubleBuffer<MC, KC, NC, MR, NR, WY, WX>);
+  // BenchBlas();
 }
 
 // TEST_F(CUGemmMNK, naive) { Bench(CublasSgemm); }
