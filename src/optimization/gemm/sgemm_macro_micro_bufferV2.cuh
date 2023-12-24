@@ -8,7 +8,7 @@
 
 template <size_t MC, size_t KC, size_t NC, size_t MR, size_t NR, size_t WY,
           size_t WX>
-static __global__ void CudaSGemmMacroMicroBufferImpl(
+static __global__ void CudaSGemmMacroMicroBufferImplV2(
     const float *__restrict__ A, const float *__restrict__ B,
     float *__restrict__ C, int M, int N, int K, int ldk, int ldn) {
 
@@ -71,6 +71,14 @@ static __global__ void CudaSGemmMacroMicroBufferImpl(
   constexpr size_t B_MACRO_REG_F4_NUM = UP_DIV(B_MACRO_F4_NUM, TXY);
   float b_macro_regs[B_MACRO_REG_F4_NUM * 4];
 
+  size_t a_macro_f4_x0 = tid % KC_F4_NUM;
+  size_t a_macro_f4_y0 = tid / KC_F4_NUM;
+  constexpr size_t A_MACRO_F4_Y_STRIDE = TXY / KC_F4_NUM;
+
+  size_t b_macro_f4_x0 = tid % NC_F4_NUM;
+  size_t b_macro_f4_y0 = tid / NC_F4_NUM;
+  constexpr size_t B_MACRO_F4_Y_STRIDE = TXY / NC_F4_NUM;
+
   // Helper lambdas
   auto SMemToReg = [&a_regs, &b_regs, wid_x, wid_y, tid_x_in_w,
                     tid_y_in_w](int reg_buf_id, int smem_buf_id, int p) {
@@ -122,72 +130,60 @@ static __global__ void CudaSGemmMacroMicroBufferImpl(
 
   // Load MacroBlock from GMem to Reg
   auto GMemToReg = [&a_macro_regs, &b_macro_regs, A, B, tid, bid_y, bid_x, ldn,
-                    ldk](int pc) {
+                    ldk, a_macro_f4_x0, a_macro_f4_y0, b_macro_f4_x0,
+                    b_macro_f4_y0](int pc) {
     // Load A
     const float *a_macro_gmem = A + bid_y * MC * ldk + pc;
 #pragma unroll
-    for (int i = 0, j = 0; i < A_MACRO_F4_NUM; i += TXY, j++) {
-      int t_f4_id = i + tid;
-      if (t_f4_id < A_MACRO_F4_NUM) {
-        int y = t_f4_id / KC_F4_NUM;
-        int x = t_f4_id % KC_F4_NUM;
-
-        *FP4_PTR(a_macro_regs + j * 4) =
-            *CONST_FP4_PTR(a_macro_gmem + y * ldk + x * 4);
-      }
+    for (int i = 0; i < A_MACRO_REG_F4_NUM; i++) {
+      auto x = a_macro_f4_x0;
+      auto y = a_macro_f4_y0 + i * A_MACRO_F4_Y_STRIDE;
+      *FP4_PTR(a_macro_regs + i * 4) =
+          *CONST_FP4_PTR(a_macro_gmem + y * ldk + x * 4);
     }
 
     // Load B
     const float *b_macro_gmem = B + pc * ldn + bid_x * NC;
 #pragma unroll
-    for (int i = 0, j = 0; i < B_MACRO_F4_NUM; i += TXY, j++) {
-      int t_f4_id = i + tid;
-      if (t_f4_id < B_MACRO_F4_NUM) {
-        int y = t_f4_id / NC_F4_NUM;
-        int x = t_f4_id % NC_F4_NUM;
-
-        *FP4_PTR(b_macro_regs + j * 4) =
-            *CONST_FP4_PTR(b_macro_gmem + y * ldn + x * 4);
-      }
+    for (int i = 0; i < B_MACRO_REG_F4_NUM; i++) {
+      auto x = b_macro_f4_x0;
+      auto y = b_macro_f4_y0 + i * B_MACRO_F4_Y_STRIDE;
+      *FP4_PTR(b_macro_regs + i * 4) =
+          *CONST_FP4_PTR(b_macro_gmem + y * ldn + x * 4);
     }
   };
   // Load MacroBlock from Reg to SMem
-  auto RegToSMem = [&a_macro_regs, &b_macro_regs, tid](int buf_id) {
+  auto RegToSMem = [&a_macro_regs, &b_macro_regs, tid, a_macro_f4_x0,
+                    a_macro_f4_y0, b_macro_f4_x0, b_macro_f4_y0](int buf_id) {
 // Load A
 #pragma unroll
     for (int i = 0; i < A_MACRO_REG_F4_NUM; i++) {
-      int t_f4_id = i * TXY + tid;
-      if (t_f4_id < A_MACRO_F4_NUM) {
-        int y = t_f4_id / KC_F4_NUM;
-        int x = t_f4_id % KC_F4_NUM;
-        int mr_id = y / MR;
-        int mr_offset = y % MR;
+      auto x = a_macro_f4_x0;
+      auto y = a_macro_f4_y0 + i * A_MACRO_F4_Y_STRIDE;
+      int mr_id = y / MR;
+      int mr_offset = y % MR;
 
-        float4 tmp = *CONST_FP4_PTR(a_macro_regs + i * 4);
+      float4 tmp = *CONST_FP4_PTR(a_macro_regs + i * 4);
 
-        float *ptr = a_macro_smem + buf_id * A_MACRO_SMEM_SIZE +
-                     mr_id * A_MICRO_SIZE + (x * 4) * MR + mr_offset;
-        *(ptr) = tmp.x;
-        *(ptr + MR) = tmp.y;
-        *(ptr + 2 * MR) = tmp.z;
-        *(ptr + 3 * MR) = tmp.w;
-      }
+      float *ptr = a_macro_smem + buf_id * A_MACRO_SMEM_SIZE +
+                   mr_id * A_MICRO_SIZE + (x * 4) * MR + mr_offset;
+      *(ptr) = tmp.x;
+      *(ptr + MR) = tmp.y;
+      *(ptr + 2 * MR) = tmp.z;
+      *(ptr + 3 * MR) = tmp.w;
     }
 
 // Load B
 #pragma unroll
     for (int i = 0; i < B_MACRO_REG_F4_NUM; i++) {
-      int t_f4_id = i * TXY + tid;
-      if (t_f4_id < B_MACRO_F4_NUM) {
-        int y = t_f4_id / NC_F4_NUM;
-        int x = t_f4_id % NC_F4_NUM;
-        int nr_id = x / NR_F4_NUM;
-        int nr_offset = x % NR_F4_NUM;
+      auto x = b_macro_f4_x0;
+      auto y = b_macro_f4_y0 + i * B_MACRO_F4_Y_STRIDE;
+      int nr_id = x / NR_F4_NUM;
+      int nr_offset = x % NR_F4_NUM;
 
-        *FP4_PTR(b_macro_smem + buf_id * B_MACRO_SMEM_SIZE +
-                 nr_id * B_MICRO_SIZE + y * NR + nr_offset * 4) =
-            *CONST_FP4_PTR(b_macro_regs + i * 4);
-      }
+      *FP4_PTR(b_macro_smem + buf_id * B_MACRO_SMEM_SIZE +
+               nr_id * B_MICRO_SIZE + y * NR + nr_offset * 4) =
+          *CONST_FP4_PTR(b_macro_regs + i * 4);
     }
   };
 
@@ -234,10 +230,10 @@ static __global__ void CudaSGemmMacroMicroBufferImpl(
 
 template <size_t MC, size_t KC, size_t NC, size_t MR, size_t NR, size_t WY,
           size_t WX>
-static void CudaSGemmMacroMicroBuffer(const float *A, const float *B, float *C,
-                                      int M, int N, int K) {
+static void CudaSGemmMacroMicroBufferV2(const float *A, const float *B,
+                                        float *C, int M, int N, int K) {
   dim3 dimBlock(NC / NR, MC / MR);
   dim3 dimGrid(N / NC, M / MC);
-  CudaSGemmMacroMicroBufferImpl<MC, KC, NC, MR, NR, WY, WX>
+  CudaSGemmMacroMicroBufferImplV2<MC, KC, NC, MR, NR, WY, WX>
       <<<dimGrid, dimBlock>>>(A, B, C, M, N, K, K, N);
 }
