@@ -40,66 +40,131 @@ static __global__ void CudaSGemmMacroMicroBufferImpl(
   constexpr size_t A_MICRO_SIZE = UP_ROUND(MR * KC, 32) + A_PAD;
   constexpr size_t A_WARP_MICRO_SIZE = WY * A_MICRO_SIZE;
   constexpr size_t A_MICRO_NUM = MC / MR;
+  constexpr size_t A_MACRO_SMEM_SIZE = A_MICRO_NUM * A_MICRO_SIZE;
 
   constexpr size_t B_PAD = 4;
   constexpr size_t B_MICRO_SIZE = UP_ROUND(KC * NR, 32) + B_PAD;
   constexpr size_t B_WARP_MICRO_SIZE = WX * B_MICRO_SIZE;
   constexpr size_t B_MICRO_NUM = NC / NR;
+  constexpr size_t B_MACRO_SMEM_SIZE = B_MICRO_NUM * B_MICRO_SIZE;
 
-  __shared__ float a_macro_smem[A_MICRO_NUM * A_MICRO_SIZE];
-  __shared__ float b_macro_smem[B_MICRO_NUM * B_MICRO_SIZE];
+  __shared__ float a_macro_smem[2 * A_MACRO_SMEM_SIZE];
+  __shared__ float b_macro_smem[2 * B_MACRO_SMEM_SIZE];
 
-  // Regs
+  // Regs for MicroKernel
   float a_regs[2 * MR];
   float b_regs[2 * NR];
   float c_acc_regs[MR * NR] = {0};
 
-  auto OuterProduct = [&a_regs, &b_regs, &c_acc_regs](int reg_buf_id) {
+  // Regs for MacroKernel
+  constexpr size_t A_MACRO_F4_NUM = MC * KC / 4;
+  constexpr size_t KC_F4_NUM = KC / 4;
+  //  Regs required to store AMacroBlock per thread
+  constexpr size_t A_MACRO_REG_F4_NUM = UP_DIV(A_MACRO_F4_NUM, TXY);
+  float a_macro_regs[A_MACRO_REG_F4_NUM * 4];
+
+  constexpr size_t B_MACRO_F4_NUM = KC * NC / 4;
+  constexpr size_t NC_F4_NUM = NC / 4;
+  constexpr size_t NR_F4_NUM = NR / 4;
+  constexpr size_t B_MACRO_REG_F4_NUM = UP_DIV(B_MACRO_F4_NUM, TXY);
+  float b_macro_regs[B_MACRO_REG_F4_NUM * 4];
+
+  // Helper lambdas
+  auto SMemToReg = [&a_regs, &b_regs, wid_x, wid_y, tid_x_in_w,
+                    tid_y_in_w](int reg_buf_id, int smem_buf_id, int p) {
+#pragma unroll
+    for (int i = 0; i < NR; i += 4) {
+      *FP4_PTR(b_regs + reg_buf_id * NR + i) = *CONST_FP4_PTR(
+          b_macro_smem + smem_buf_id * B_MACRO_SMEM_SIZE +
+          wid_x * B_WARP_MICRO_SIZE + tid_x_in_w * B_MICRO_SIZE + p * NR + i);
+    }
+#pragma unroll
+    for (int i = 0; i < MR; i += 4) {
+      *FP4_PTR(a_regs + reg_buf_id * MR + i) = *CONST_FP4_PTR(
+          a_macro_smem + smem_buf_id * A_MACRO_SMEM_SIZE +
+          wid_y * A_WARP_MICRO_SIZE + tid_y_in_w * A_MICRO_SIZE + p * MR + i);
+    }
+  };
+
+  auto OuterProduct = [&a_regs, &b_regs, &c_acc_regs](int buf_id) {
 
 #pragma unroll
     for (int i = 0; i < MR; i++) {
 #pragma unroll
       for (int j = 0; j < NR; j++) {
         c_acc_regs[i * NR + j] +=
-            a_regs[reg_buf_id * MR + i] * b_regs[reg_buf_id * NR + j];
+            a_regs[buf_id * MR + i] * b_regs[buf_id * NR + j];
       }
     }
   };
-  auto SMemToReg = [&a_regs, &b_regs, wid_x, wid_y, tid_x_in_w,
-                    tid_y_in_w](int reg_buf_id, int p) {
+
+  auto MicroKernel = [&a_regs, &b_regs, &c_acc_regs, &SMemToReg,
+                      &OuterProduct](int smem_buf_id) {
+    // Prefetch
+    int st_buf_id = 0;
+    int ld_buf_id = 0;
+    SMemToReg(st_buf_id, smem_buf_id, 0);
+    st_buf_id ^= 1; // XOR
+// MicroKernel
 #pragma unroll
-    for (int i = 0; i < NR; i += 4) {
-      *FP4_PTR(b_regs + reg_buf_id * NR + i) =
-          *CONST_FP4_PTR(b_macro_smem + wid_x * B_WARP_MICRO_SIZE +
-                         tid_x_in_w * B_MICRO_SIZE + p * NR + i);
+    for (int p = 1; p < KC; p++) {
+      // Prefetch
+      SMemToReg(st_buf_id, smem_buf_id, p);
+      st_buf_id ^= 1;
+
+      OuterProduct(ld_buf_id);
+      ld_buf_id ^= 1;
     }
-#pragma unroll
-    for (int i = 0; i < MR; i += 4) {
-      *FP4_PTR(a_regs + reg_buf_id * MR + i) =
-          *CONST_FP4_PTR(a_macro_smem + wid_y * A_WARP_MICRO_SIZE +
-                         tid_y_in_w * A_MICRO_SIZE + p * MR + i);
-    }
+    OuterProduct(ld_buf_id);
   };
 
-#pragma unroll(2)
-  for (size_t pc = 0; pc < K; pc += KC) {
-    // Load AMacroBlock from GMem to SMem
+  // Load MacroBlock from GMem to Reg
+  auto GMemToReg = [&a_macro_regs, &b_macro_regs, A, B, tid, bid_y, bid_x, ldn,
+                    ldk](int pc) {
+    // Load A
     const float *a_macro_gmem = A + bid_y * MC * ldk + pc;
-
-    constexpr size_t A_MACRO_F4_NUM = MC * KC / 4;
-    constexpr size_t KC_F4_NUM = KC / 4;
-#pragma unroll
-    for (int i = 0; i < A_MACRO_F4_NUM; i += TXY) {
+    for (int i = 0, j = 0; i < A_MACRO_F4_NUM; i += TXY, j++) {
       int t_f4_id = i + tid;
       if (t_f4_id < A_MACRO_F4_NUM) {
         int y = t_f4_id / KC_F4_NUM;
         int x = t_f4_id % KC_F4_NUM;
         int mr_id = y / MR;
         int mr_offset = y % MR;
-        float4 tmp = *CONST_FP4_PTR(a_macro_gmem + y * ldk + x * 4);
+        *FP4_PTR(a_macro_regs + j * 4) =
+            *CONST_FP4_PTR(a_macro_gmem + y * ldk + x * 4);
+      }
+    }
 
-        float *ptr =
-            a_macro_smem + mr_id * A_MICRO_SIZE + (x * 4) * MR + mr_offset;
+    // Load B
+    const float *b_macro_gmem = B + pc * ldn + bid_x * NC;
+    for (int i = 0, j = 0; i < B_MACRO_F4_NUM; i += TXY, j++) {
+      int t_f4_id = i + tid;
+      if (t_f4_id < B_MACRO_F4_NUM) {
+        int y = t_f4_id / NC_F4_NUM;
+        int x = t_f4_id % NC_F4_NUM;
+        int nr_id = x / NR_F4_NUM;
+        int nr_offset = x % NR_F4_NUM;
+
+        *FP4_PTR(b_macro_regs + j * 4) =
+            *CONST_FP4_PTR(b_macro_gmem + y * ldn + x * 4);
+      }
+    }
+  };
+  // Load MacroBlock from Reg to SMem
+  auto RegToSMem = [&a_macro_regs, &b_macro_regs, tid](int buf_id) {
+    // Load A
+    for (int i = 0; i < A_MACRO_REG_F4_NUM; i++) {
+      int t_f4_id = i * TXY + tid;
+      if (t_f4_id < A_MACRO_F4_NUM) {
+        int y = t_f4_id / KC_F4_NUM;
+        int x = t_f4_id % KC_F4_NUM;
+        int mr_id = y / MR;
+        int mr_offset = y % MR;
+
+        float4 tmp = *CONST_FP4_PTR(a_macro_regs + i * 4);
+
+        float *ptr = a_macro_smem + buf_id * A_MACRO_SMEM_SIZE +
+                     mr_id * A_MICRO_SIZE + (x * 4) * MR + mr_offset;
         *(ptr) = tmp.x;
         *(ptr + MR) = tmp.y;
         *(ptr + 2 * MR) = tmp.z;
@@ -107,48 +172,48 @@ static __global__ void CudaSGemmMacroMicroBufferImpl(
       }
     }
 
-    // Load BMacroBlock from GMem to SMem
-    const float *b_macro_gmem = B + pc * ldn + bid_x * NC;
-
-    constexpr size_t B_MACRO_F4_NUM = KC * NC / 4;
-
-    constexpr size_t NC_F4_NUM = NC / 4;
-    constexpr size_t NR_F4_NUM = NR / 4;
-
-#pragma unroll
-    for (int i = 0; i < B_MACRO_F4_NUM; i += TXY) {
-      int t_f4_id = i + tid;
+    // Load B
+    for (int i = 0; i < B_MACRO_REG_F4_NUM; i++) {
+      int t_f4_id = i * TXY + tid;
       if (t_f4_id < B_MACRO_F4_NUM) {
-
         int y = t_f4_id / NC_F4_NUM;
         int x = t_f4_id % NC_F4_NUM;
         int nr_id = x / NR_F4_NUM;
         int nr_offset = x % NR_F4_NUM;
 
-        *FP4_PTR(b_macro_smem + nr_id * B_MICRO_SIZE + y * NR + nr_offset * 4) =
-            *CONST_FP4_PTR(b_macro_gmem + y * ldn + x * 4);
+        *FP4_PTR(b_macro_smem + buf_id * B_MACRO_SMEM_SIZE +
+                 nr_id * B_MICRO_SIZE + y * NR + nr_offset * 4) =
+            *CONST_FP4_PTR(b_macro_regs + i * 4);
       }
     }
-    __syncthreads();
+  };
 
-    // Prefetch
-    int st_buf_id = 0;
-    int ld_buf_id = 0;
-    SMemToReg(st_buf_id, 0);
-    st_buf_id ^= 1; // XOR
+  int smem_buf_st_id = 0;
+  int smem_buf_ld_id = 0;
+  GMemToReg(0);
+  RegToSMem(smem_buf_st_id);
+  smem_buf_st_id ^= 1;
 
-    // MicroKernel
-#pragma unroll
-    for (int p = 1; p < KC; p++) {
-      // Prefetch
-      SMemToReg(st_buf_id, p);
-      st_buf_id ^= 1;
-
-      OuterProduct(ld_buf_id);
-      ld_buf_id ^= 1;
+  __syncthreads();
+  size_t pc = 0;
+  do {
+    // Look ahead
+    //  Prefetch
+    if (pc + KC < K) {
+      GMemToReg(pc + KC);
     }
-    OuterProduct(ld_buf_id);
-  }
+    // MicroKernel for last prefetched lata
+    // This step is alaways performed
+    MicroKernel(smem_buf_ld_id);
+    smem_buf_ld_id ^= 1;
+
+    if (pc + KC < K) {
+      RegToSMem(smem_buf_st_id);
+      smem_buf_st_id ^= 1;
+      __syncthreads();
+    }
+    pc += KC;
+  } while (pc < K);
 
   // Store C
   float *c_macro_gmem = C + bid_y * MC * ldn + bid_x * NC;
