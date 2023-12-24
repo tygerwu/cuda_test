@@ -2,15 +2,14 @@
 #include "gflags/gflags.h"
 #include "naive.cuh"
 #include "sgemm.cuh"
-#include "sgemm_buffer.cuh"
-#include "sgemm_reg_buffer.cuh"
+#include "sgemm_macro_buffer.cuh"
+#include "sgemm_macro_micro_buffer.cuh"
+#include "sgemm_micro_buffer.cuh"
 #include "sgemm_v3.cuh"
 #include "utils.cuh"
 #include "utils.h"
 #include "gtest/gtest.h"
 #include <cublas_v2.h>
-
-using FloatVector = std::vector<float>;
 
 using SGemmFunc = std::function<void(const float *A, const float *B, float *C,
                                      int M, int N, int K)>;
@@ -139,7 +138,7 @@ TEST_F(CUSgemmBench, v3) {
 }
 
 TEST_F(CUSgemmBench, v0) {
-  m = 1024, n = 4096, k = 4096;
+  m = 512, n = 512, k = 512;
 
   constexpr int WY = 4;
   constexpr int WX = 8;
@@ -162,14 +161,14 @@ TEST_F(CUSgemmBench, v0) {
   constexpr int THREAD_SIZE_Y = 8;
   constexpr bool ENABLE_DOUBLE_BUFFER = false;
 
-  loops = 1;
-  Bench(CudaSGemm<MC, KC, NC, MR, NR, WY, WX>);
+  loops = 12;
+  // Bench(CudaSGemm<MC, KC, NC, MR, NR, WY, WX>);
   // Bench(SGemmV3<BLOCK_SIZE_M, BLOCK_SIZE_K, BLOCK_SIZE_N, THREAD_SIZE_X,
   //               THREAD_SIZE_Y, ENABLE_DOUBLE_BUFFER>);
 
-  // Bench(CudaSGemmRegBuffer<MC, KC, NC, MR, NR, WY, WX>);
-  Bench(CudaSGemmDoubleBuffer<MC, KC, NC, MR, NR, WY, WX>);
-  // BenchBlas();
+  Verify(CudaSGemmMicroBuffer<MC, KC, NC, MR, NR, WY, WX>);
+  // Bench(CudaSGemmDoubleBuffer<MC, KC, NC, MR, NR, WY, WX>);
+  BenchBlas();
 }
 
 // TEST_F(CUGemmMNK, naive) { Bench(CublasSgemm); }
