@@ -61,7 +61,7 @@ TEST(cute, tensor2) {
 
   int m = 256;
   int n = 32;
-  int k = 64;
+  int k = 32;
   int ASIZE = m * k, BSIZE = k * n, CSIZE = m * n;
   int ABYTES = ASIZE * sizeof(T);
   int BBYTES = BSIZE * sizeof(T);
@@ -77,7 +77,7 @@ TEST(cute, tensor2) {
                               make_layout(Shape<_1, _2, _2>{})));
   MMA tiled_mma;
   // ColMajor
-  auto b_tensor = make_tensor(hB.data(), make_shape(k, n), make_stride(n, 1));
+  auto b_tensor = make_tensor(hB.data(), make_shape(k, n), make_stride(1, n));
   auto thrb_tensor = tiled_mma.thrfrg_B(b_tensor);
   auto tid_tensor = tiled_mma.tidfrg_B(b_tensor);
   auto tbGb = tiled_mma.get_slice(1).partition_B(b_tensor);
