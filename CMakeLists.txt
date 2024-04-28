@@ -6,20 +6,19 @@ set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${PROJECT_SOURCE_DIR}/cmake)
 include(googletest)
 include(gflags)
 
+# Settings
+set(CUTLASS_ROOT ${PROJECT_SOURCE_DIR}/third_lib/cutlass CACHE STRING "Cutlass root dir")
+set(CUDA_HOME /usr/local/cuda CACHE STRING "Cuda home")
+
+
 # NVRTC Settings
 add_definitions(-DNVRTC_GET_TYPE_NAME=1 -DJITIFY_PRINT_PTX=1)
 
 # Cutlass Settings
-set(CUTLASS_BUILD_DIR /media/tyger/linux_ssd/codes/cxx_test/cuda_lab/third_lib/cutlass/build)
-if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-set(CUTLASS_BUILD_DIR /media/tyger/linux_ssd/codes/cxx_test/cuda_lab/third_lib/cutlass/build_debug)
-endif()
 set(CUTLASS_INCLUDE_DIRS 
-    /media/tyger/linux_ssd/codes/cxx_test/cuda_lab/third_lib/cutlass/include
-    /media/tyger/linux_ssd/codes/cxx_test/cuda_lab/third_lib/cutlass/tools/util/include
+    ${CUTLASS_ROOT}/include
+    ${CUTLASS_ROOT}/tools/util/include
 )
-set(CUTLASS_LIBRARY_DIR 
-    /media/tyger/linux_ssd/codes/cxx_test/cuda_lab/third_lib/cutlass/build/tools/library)
 
 
 file(GLOB_RECURSE srcs 
@@ -37,18 +36,24 @@ target_include_directories(cuda_lab_test PRIVATE
     ${gflags_INCLUDE_DIR}
     ${PROJECT_SOURCE_DIR}/src
     ${CUTLASS_INCLUDE_DIRS}
+    ${CUDA_HOME}/include
 ) 
+
+target_link_directories(
+    cuda_lab_test PRIVATE 
+    ${CUDA_HOME}/lib64
+    ${CUDA_HOME}/lib64/stubs
+)
 
 target_link_libraries(cuda_lab_test 
     gmock
     gtest
     ${gflags_LIBRARIES}
-    /usr/local/cuda/lib64/stubs/libcuda.so
-    /usr/local/lib64/libnvrtc.so
+    libcuda.so
+    libnvrtc.so
     cublas
     cublasLt
     curand
-    ${CUTLASS_LIBRARY_DIR}/libcutlass.a
 )
 set_target_properties(cuda_lab_test PROPERTIES CUDA_ARCHITECTURES "86")
 
