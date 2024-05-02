@@ -4,7 +4,7 @@
 
 using namespace cute;
 
-TEST(cute,iden){
+TEST(cute,iden_1){
     using BM = _8;
     using BK = _32; 
     using TK = Int<int(BK{} / 8)>;
@@ -51,4 +51,25 @@ TEST(cute,iden){
 
     PrintIden("g2s_iden:",g2s_iden);
     Print("g2s_iden(8):",g2s_iden(8));
+    PrintIden("g2s_iden layout:",layout(g2s_iden));
+}
+
+
+TEST(cute,iden_2){
+auto a  = Layout<Shape<_4,_8>,Stride<_1,_4>>{};
+auto b  = Layout<Shape<_4,_8>,Stride<_4,_5>>{};
+auto x  =  Layout<Shape<_4,_8>,Stride<_1,_1>>{};
+auto id = make_identity_layout(Shape<_4,_8>{});
+
+auto tile = make_tile(_2{},_4{});
+
+auto c0 = zipped_divide(id,tile);
+auto c1 = zipped_divide(x,tile);
+auto c2 = zipped_divide(a,tile);
+auto c3 = zipped_divide(b,tile);
+
+    Print("c0",c0);
+    Print("c1",c1);
+    Print("c2",c2);
+    Print("c3",c3);
 }

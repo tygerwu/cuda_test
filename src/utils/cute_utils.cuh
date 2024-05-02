@@ -3,8 +3,6 @@
 #include <cuda.h>
 
 
-
-
 template<typename T>
 CUTE_HOST_DEVICE 
 void Print(const char* msg,const T& obj){

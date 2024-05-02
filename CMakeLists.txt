@@ -9,6 +9,7 @@ include(gflags)
 # Settings
 set(CUTLASS_ROOT ${PROJECT_SOURCE_DIR}/third_lib/cutlass CACHE STRING "Cutlass root dir")
 set(CUDA_HOME /usr/local/cuda CACHE STRING "Cuda home")
+set(ENABLE_HOPEER OFF CACHE BOOL "Hopper")
 
 
 # NVRTC Settings
@@ -28,13 +29,22 @@ file(GLOB_RECURSE srcs
     ${PROJECT_SOURCE_DIR}/src/optimization/gemm/*.cu 
     ${PROJECT_SOURCE_DIR}/src/optimization/float4/*.cu 
     ${PROJECT_SOURCE_DIR}/src/cutlass/*.cu
-) 
+)
+
+if(ENABLE_HOPEER)
+    file(GLOB_RECURSE srcs 
+        ${PROJECT_SOURCE_DIR}/src/hopper/*.cu 
+    )
+endif()
+
+
 add_executable(cuda_lab_test main.cpp ${srcs} src/exercise/nvrtc/jitify/jitify_header.cu)
 target_include_directories(cuda_lab_test PRIVATE 
     ${gmock_SOURCE_DIR}/include
     ${gtest_SOURCE_DIR}/include
     ${gflags_INCLUDE_DIR}
     ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/src/utils
     ${CUTLASS_INCLUDE_DIRS}
     ${CUDA_HOME}/include
 ) 
@@ -60,3 +70,9 @@ set_target_properties(cuda_lab_test PROPERTIES CUDA_ARCHITECTURES "86")
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     target_compile_options(cuda_lab_test PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-G>)
 endif()
+
+target_compile_options(cuda_lab_test PRIVATE 
+    $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
+    $<$<COMPILE_LANGUAGE:CUDA>:--std=c++17>
+)
+

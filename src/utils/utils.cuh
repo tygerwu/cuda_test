@@ -5,6 +5,8 @@
 #include <iostream>
 #include <nvrtc.h>
 #include <stdio.h>
+
+
 #define WARP_SIZE 32
 #define BANK_ROW_SIZE 128
 
