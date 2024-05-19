@@ -1,7 +1,7 @@
 #pragma once
-#include "cute/tensor.hpp" 
 #include <cuda.h>
-
+#include "cute/tensor.hpp" 
+#include "cute_smem_utils.cuh"
 
 template<typename T>
 CUTE_HOST_DEVICE 

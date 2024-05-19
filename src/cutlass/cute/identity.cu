@@ -56,20 +56,26 @@ TEST(cute,iden_1){
 
 
 TEST(cute,iden_2){
-auto a  = Layout<Shape<_4,_8>,Stride<_1,_4>>{};
-auto b  = Layout<Shape<_4,_8>,Stride<_4,_5>>{};
-auto x  =  Layout<Shape<_4,_8>,Stride<_1,_1>>{};
-auto id = make_identity_layout(Shape<_4,_8>{});
+    auto a  = Layout<Shape<_4,_8>,Stride<_1,_4>>{};
+    auto b  = Layout<Shape<_4,_8>,Stride<_4,_5>>{};
+    auto x  =  Layout<Shape<_4,_8>,Stride<_1,_1>>{};
+    auto id = make_identity_layout(Shape<_4,_8>{});
 
-auto tile = make_tile(_2{},_4{});
+    auto tile = make_tile(_2{},_4{});
 
-auto c0 = zipped_divide(id,tile);
-auto c1 = zipped_divide(x,tile);
-auto c2 = zipped_divide(a,tile);
-auto c3 = zipped_divide(b,tile);
+    auto c0 = zipped_divide(id,tile);
+    auto c1 = zipped_divide(x,tile);
+    auto c2 = zipped_divide(a,tile);
+    auto c3 = zipped_divide(b,tile);
 
     Print("c0",c0);
     Print("c1",c1);
     Print("c2",c2);
     Print("c3",c3);
+}
+
+TEST(cute,iden_3){
+    auto shape = make_shape(2,make_shape(3,make_shape(4,5)));
+    auto layout = make_layout(shape,make_basis_like(shape));
+    Print("layout:",layout);
 }
