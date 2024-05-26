@@ -1,6 +1,8 @@
 #include "cute/tensor.hpp"
 #include "gtest/gtest.h"
 #include "utils.h"
+#include "cutlass/layout/matrix.h"
+#include "cutlass/detail/layout.hpp"
 using namespace cute;
 
 
@@ -86,3 +88,50 @@ TEST(cute,tma_2){
     Print("pos1:",tma_src_a(make_coord(_,_,2)));
 }
 
+
+
+
+TEST(cute,tma_3){
+    using T = half_t;
+
+    // ColMajor
+    using LayoutA = cutlass::layout::ColumnMajor;
+    using AtomLayout = Layout<Shape<_32,_8>,Stride<_1,_32>>;
+    using BM = Int<128>;
+    using BK = Int<32>;
+    using BKStages = Int<3>;
+    using Steps = Step<_2,_1,_3>;
+    using SMemLayout = decltype(tile_to_shape(AtomLayout{},
+                                              make_shape(BM{},BK{},BKStages{}),
+                                              Steps{}));
+    using Steps2 = Step<_1,_2,_3>;
+    using SMemLayout2 = decltype(tile_to_shape(AtomLayout{},
+                                              make_shape(BM{},BK{},BKStages{}),
+                                                 Steps2{}));
+    
+    using StrideA = cutlass::detail::TagToStrideA_t<LayoutA>;
+
+    using GmemTiledCopyA = SM90_TMA_LOAD_MULTICAST;
+
+
+    Print("SMemLayout2:",SMemLayout2{});
+    Print("SMemLayout:",SMemLayout{});
+    
+    using ClusterShape = Shape<_4>;
+
+    int GM = 256;
+    int GK = 256;
+    int Batch = 1;
+    auto g_layout = make_layout(make_shape(GM,GK,Batch), make_stride(1,GM,GM*GK));
+    auto g_data   = std::vector<T>(size(g_layout));
+    auto g_tensor = make_tensor(make_gmem_ptr(g_data.data()),g_layout);
+
+    auto tma_a  = make_tma_copy(GmemTiledCopyA{},g_tensor,SMemLayout{}(_,_,_0{}),make_shape(BM{},BK{}),ClusterShape{});
+    auto tma_a2 = make_tma_copy(GmemTiledCopyA{},g_tensor,SMemLayout2{}(_,_,_0{}),make_shape(BM{},BK{}),ClusterShape{});
+
+    Print("tma_a:",tma_a);   // boxDim         (32,16,1,1,1)
+    Print("tma_a2:",tma_a2); // boxDim         (32,4,1,1,1)
+    Print("tma_a2:",tma_a2.get_slice(2).partition_S(g_tensor(_,_,0))); 
+
+
+}

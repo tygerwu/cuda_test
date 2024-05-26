@@ -66,6 +66,8 @@ namespace HalfSMem{
 
         using SMemLayoutAtom = typename SMemLayoutAtomTrait<M,LogicalLayoutAtom>::SMemLayoutAtom;
 
+        using SMemLayout = decltype(tile_to_shape(SMemLayoutAtom{},TileShape{}));
+
 
         using EPT = typename EPTTrait<8,K*M,Threads>::EPT;
         // Threads along M 
@@ -77,12 +79,12 @@ namespace HalfSMem{
 
         using ThrLayout = Layout<Shape<TM,TK>,Stride<_1,TM>>;
         using ValLayout = Layout<Shape<EPT,_1>>;
-
-        using AsyncCopyMeta = decltype(make_tiled_copy(Copy_Atom<SM80_CP_ASYNC_CACHEGLOBAL<VecType,T>>{},
+        
+        using AsyncCopyMeta = decltype(make_tiled_copy(Copy_Atom<SM80_CP_ASYNC_CACHEGLOBAL<VecType>,T>{},
                                                        ThrLayout{},
                                                        ValLayout{}));
         
-        using Copy          = decltype(make_tiled_copy(Copy_Atom<UniversalCopy<VecType,T>>{},
+        using Copy          = decltype(make_tiled_copy(Copy_Atom<UniversalCopy<VecType>,T>{},
                                                        ThrLayout{},
                                                        ValLayout{}));
 
@@ -105,6 +107,7 @@ namespace HalfSMem{
 
         using SMemLayoutAtom = typename SMemLayoutAtomTrait<K,LogicalLayoutAtom>::SMemLayoutAtom;
 
+         using SMemLayout = decltype(tile_to_shape(SMemLayoutAtom{},TileShape{}));
 
         using EPT = typename EPTTrait<8,K*M,Threads>::EPT;
         // Threads along K
@@ -117,11 +120,11 @@ namespace HalfSMem{
         using ThrLayout = Layout<Shape<TM,TK>,Stride<TK,_1>>;
         using ValLayout = Layout<Shape<_1,EPT>>;
 
-        using AsyncCopyMeta = decltype(make_tiled_copy(Copy_Atom<SM80_CP_ASYNC_CACHEGLOBAL<VecType,T>>{},
+        using AsyncCopyMeta = decltype(make_tiled_copy(Copy_Atom<SM80_CP_ASYNC_CACHEGLOBAL<VecType>,T>{},
                                                        ThrLayout{},
                                                        ValLayout{}));
         
-        using Copy          = decltype(make_tiled_copy(Copy_Atom<UniversalCopy<VecType,T>>{},
+        using Copy          = decltype(make_tiled_copy(Copy_Atom<UniversalCopy<VecType>,T>{},
                                                        ThrLayout{},
                                                        ValLayout{}));
 

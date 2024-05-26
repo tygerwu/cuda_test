@@ -6,11 +6,11 @@ set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${PROJECT_SOURCE_DIR}/cmake)
 include(googletest)
 include(gflags)
 
+
 # Settings
 set(CUTLASS_ROOT ${PROJECT_SOURCE_DIR}/third_lib/cutlass CACHE STRING "Cutlass root dir")
 set(CUDA_HOME /usr/local/cuda CACHE STRING "Cuda home")
 set(ENABLE_HOPEER OFF CACHE BOOL "Hopper")
-
 
 # NVRTC Settings
 add_definitions(-DNVRTC_GET_TYPE_NAME=1 -DJITIFY_PRINT_PTX=1)
@@ -20,6 +20,12 @@ set(CUTLASS_INCLUDE_DIRS
     ${CUTLASS_ROOT}/include
     ${CUTLASS_ROOT}/tools/util/include
 )
+
+if(${ENABLE_HOPEER})
+    set(CMAKE_CUDA_ARCHITECTURES 86 90a)
+else()
+    set(CMAKE_CUDA_ARCHITECTURES 86)
+endif()
 
 
 file(GLOB_RECURSE srcs 
@@ -32,9 +38,10 @@ file(GLOB_RECURSE srcs
 )
 
 if(ENABLE_HOPEER)
-    file(GLOB_RECURSE srcs 
+    file(GLOB_RECURSE hopper_srcs 
         ${PROJECT_SOURCE_DIR}/src/hopper/*.cu 
     )
+    set(srcs ${srcs} ${hopper_srcs})
 endif()
 
 
@@ -65,7 +72,7 @@ target_link_libraries(cuda_lab_test
     cublasLt
     curand
 )
-set_target_properties(cuda_lab_test PROPERTIES CUDA_ARCHITECTURES "86")
+#set_target_properties(cuda_lab_test PROPERTIES CUDA_ARCHITECTURES "86")
 
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     target_compile_options(cuda_lab_test PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-G>)
