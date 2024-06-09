@@ -1,5 +1,8 @@
 #pragma once
 #include <vector>
+#include <random>
+#include <algorithm>
+
 static std::vector<float> CreateFloats(int num, float beg, float end,
                                        float stride = 0.5) {
   std::vector<float> res(num);
@@ -14,6 +17,8 @@ static std::vector<float> CreateFloats(int num, float beg, float end,
   }
   return res;
 }
+
+
 
 template <typename T> 
 static std::vector<T> CreateData(int num, T beg, T end) {
@@ -38,4 +43,16 @@ static std::vector<To> Convert(const std::vector<From> &src) {
     dst[i] = static_cast<To>(src[i]);
   }
   return dst;
+}
+
+
+
+template<typename T>
+static std::vector<T> RandomFloats(int size, float min=-10,float max=10) {
+  std::random_device random_device;
+  auto rng = std::mt19937(random_device());
+  auto rg = std::uniform_real_distribution<>(min,max);
+  std::vector<float> tmp(size);
+  std::generate(tmp.begin(),tmp.end(),[&]{return rg(rng);});
+  return Convert<float,T>(tmp);
 }

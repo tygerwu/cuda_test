@@ -21,6 +21,14 @@ set(CUTLASS_INCLUDE_DIRS
     ${CUTLASS_ROOT}/tools/util/include
 )
 
+
+# /torch_install_dir/share/cmake/Torch
+set(Torch_DIR ${Torch_DIR})
+if(NOT Torch_DIR)
+    message(FATAL_ERROR "Torch_DIR is required")
+endif()
+find_package(Torch REQUIRED)
+
 if(${ENABLE_HOPEER})
     set(CMAKE_CUDA_ARCHITECTURES 86 90a)
 else()
@@ -35,6 +43,7 @@ file(GLOB_RECURSE srcs
     ${PROJECT_SOURCE_DIR}/src/optimization/gemm/*.cu 
     ${PROJECT_SOURCE_DIR}/src/optimization/float4/*.cu 
     ${PROJECT_SOURCE_DIR}/src/cutlass/*.cu
+    ${PROJECT_SOURCE_DIR}/src/op/attention/*.cu
 )
 
 if(ENABLE_HOPEER)
@@ -54,6 +63,7 @@ target_include_directories(cuda_lab_test PRIVATE
     ${PROJECT_SOURCE_DIR}/src/utils
     ${CUTLASS_INCLUDE_DIRS}
     ${CUDA_HOME}/include
+    ${TORCH_INCLUDE_DIRS}
 ) 
 
 target_link_directories(
@@ -71,6 +81,7 @@ target_link_libraries(cuda_lab_test
     cublas
     cublasLt
     curand
+    ${TORCH_LIBRARIES}
 )
 #set_target_properties(cuda_lab_test PROPERTIES CUDA_ARCHITECTURES "86")
 

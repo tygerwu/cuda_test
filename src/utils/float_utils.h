@@ -7,7 +7,6 @@
 inline static bool FloatCompare(float a, float b,
                                 float maxRelativeError = 10e-3,
                                 float maxAbsoluteError = 10e-5) {
-  auto nan = std::numeric_limits<float>::quiet_NaN();
   if (std::isnan(a) && std::isnan(b)) {
     return true;
   }
