@@ -37,8 +37,9 @@ struct AttentionV1Config{
     using BM = Int<TiledMMA_VaTile_M * int(QKMMA_M{})>;
     using BN = Int<TiledMMA_VaTile_N * int(QKMMA_N{})>;
     using BK = Int<int(BKTileNum * QKMMA_K{})>;
-    using BKNum   = Int<int(HD / BK{})>;             // G2S Pipeline Stages
-    using BKTiles = Int<BKTileNum>;                  // MMA Pipeline Stages
+    using BKNum    = Int<int(HD / BK{})>;             // G2S Pipeline Stages
+    using BKTiles  = Int<BKTileNum>;                  // QKMMA Pipeline Stages
+    using BK2Tiles = Int<BK2TileNum>;                 // PVMMA Pipeline Stages
 
 
 
@@ -109,10 +110,15 @@ struct AttentionV1Config{
     using RShapeK = decltype(partition_shape_B(QKMMA{},Shape<BN,DoubleRegBufSize>{}));     // (2,2),  QKMMA_ValTile_BN,2
     using RShapeX = decltype(partition_shape_C(QKMMA{},Shape<BM,BN>{}));                   // (2,2),  QKMMA_ValTile_BM,QKMMA_ValTile_BN
 
-    using RShapeP = decltype(partition_shape_A(PVMMA{},Shape<BM,DoubleRegBufSize>{}));
+    using RShapeP = decltype(partition_shape_A(PVMMA{},Shape<BM,BN>{}));                   // (2,2,2),PVMMA_ValTile_BM,PVMMA_ValTile_BN
     using RShapeV = decltype(partition_shape_B(PVMMA{},Shape<BN2,DoubleRegBufSize>{}));
     using RShapeO = decltype(partition_shape_C(PVMMA{},Shape<BM,BN2,BN2Num>{}));           // Hold all data
 
+    using RowsPT   = Int<int(TiledMMA_VaTile_M*2)>;
+    using RShapeSM = Layout<Shape<RowsPT>>;
+
+
+    using RSizeX = Int<size(RShapeX{})>;
 
     void print(){
         printf("\n");
