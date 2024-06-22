@@ -86,5 +86,4 @@ TEST(cute, local_tile) {
     auto tile = Shape<BM,BK>();
 
     Print("zip:",zipped_divide(g_layout,tile));
-
 }

@@ -39,3 +39,11 @@ void PrintValue(const char* msg,const T& obj){
     }
     cute::print("\n");
 }
+
+// Arrange [B,R-E) into one group
+template<int B,int E,class SrcEngine,class SrcLayout>
+CUTE_HOST_DEVICE static constexpr auto 
+group_diff(const cute::Tensor<SrcEngine,SrcLayout>& tensor) {
+    constexpr int R = SrcLayout::rank;
+    return cute::group_modes<B,R-E>(tensor);
+}
