@@ -170,9 +170,9 @@ struct AttentionV1ConfigTratis<64>{
     static constexpr int HD = 64;
     static constexpr int TiledMMA_ThrTile_M = 1;
     static constexpr int TiledMMA_VaTile_M  = 2;       
-    static constexpr int TiledMMA_VaTile_N  = 2;        // BN = N x 16
-    static constexpr int BKTileNum  = 2;                // BK = BKTileNum x 16
-    static constexpr int BK2TileNum = 2;
+    static constexpr int TiledMMA_VaTile_N  = 8;        // BN = N x 16
+    static constexpr int BKTileNum  = 4;                // BK = BKTileNum x 16
+    static constexpr int BK2TileNum = 8;
     static constexpr int BN2Size = 64;
 
 
@@ -182,9 +182,18 @@ struct AttentionV1ConfigTratis<64>{
 
 template<>
 struct AttentionV1ConfigTratis<128>{
-    static_assert("Invalid HD");
-};
+    using T = __half; 
+    static constexpr int HD = 128;
+    static constexpr int TiledMMA_ThrTile_M = 1;
+    static constexpr int TiledMMA_VaTile_M  = 2;       
+    static constexpr int TiledMMA_VaTile_N  = 8;        // BN = N x 16
+    static constexpr int BKTileNum  = 8;                // BK = BKTileNum x 16
+    static constexpr int BK2TileNum = 8;
+    static constexpr int BN2Size = 128;
 
+
+    using CFG = AttentionV1Config<T,HD,TiledMMA_ThrTile_M,TiledMMA_VaTile_M,TiledMMA_VaTile_N,BKTileNum,BK2TileNum,BN2Size>;
+};
 
 
 };

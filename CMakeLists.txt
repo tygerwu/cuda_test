@@ -84,5 +84,6 @@ endif()
 target_compile_options(cuda_lab_test PRIVATE 
     $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
     $<$<COMPILE_LANGUAGE:CUDA>:--std=c++17>
+    $<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math>
 )
 

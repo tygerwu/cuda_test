@@ -1,4 +1,4 @@
-#include "attention_v1_config.cuh"
+#include "attention_v2_config.cuh"
 #include "attention_api.cuh"
 #include "macros.h"
 #include "attention_utils.cuh"
@@ -7,12 +7,12 @@ namespace Op{
 
 
 template<typename T,int HDSize>
-__global__ void AttentionV1Kernel(const T* q,const T* k,const T* v,T* o,
+__global__ void AttentionV2Kernel(const T* q,const T* k,const T* v,T* o,
                                   int batch,int qo_seq_len,int kv_seq_len,int head_num,float log2_scale,
                                   int q_batch_stride,int kv_batch_stride,int o_batch_stride){
 
     using HD = Int<HDSize>;
-    using CFG = typename AttentionV1ConfigTratis<HDSize>::CFG;                      
+    using CFG = typename AttentionV2ConfigTratis<HDSize>::CFG;                      
     using BM  = typename CFG::BM;
     using BN  = typename CFG::BN;
     using BK  = typename CFG::BK;
@@ -24,6 +24,8 @@ __global__ void AttentionV1Kernel(const T* q,const T* k,const T* v,T* o,
     using BN2Num   = typename CFG::BN2Num;
     using BKTiles  = typename CFG::BKTiles;
     using BK2Tiles = typename CFG::BK2Tiles;
+
+    using PipeNum  = typename CFG::PipeNum;
 
 
     extern __shared__ char smem[];
@@ -64,8 +66,8 @@ __global__ void AttentionV1Kernel(const T* q,const T* k,const T* v,T* o,
     int qo_head_stride  = qo_seq_len * HDSize;
     int kv_head_stride  = kv_seq_len * HDSize;
     int kv_head_offset  = batch_id * kv_batch_stride + head_id * kv_head_stride;
-    int q_head_offset   = batch_id * q_batch_stride + head_id * qo_head_stride;
-    int o_head_offset   = batch_id * o_batch_stride + head_id * qo_head_stride;
+    int q_head_offset   = batch_id * q_batch_stride  + head_id * qo_head_stride;
+    int o_head_offset   = batch_id * o_batch_stride  + head_id * qo_head_stride;
     int qo_block_offset = bx * BM{} * HDSize;
 
 
@@ -82,6 +84,8 @@ __global__ void AttentionV1Kernel(const T* q,const T* k,const T* v,T* o,
     // Load Q into SMem as early as possible
     copy(tiled_g2s_q,g2s_src_q,g2s_dst_q);
     cp_async_fence();
+
+   
 
 
     // GMem K,V,O
@@ -103,29 +107,12 @@ __global__ void AttentionV1Kernel(const T* q,const T* k,const T* v,T* o,
     auto so = make_tensor(make_smem_ptr(reinterpret_cast<T*>(smem + typename CFG::SOffO{})),typename CFG::SMemLayoutO{});
 
     // G2S K,V
-    auto g2s_src_k = g2s_k.partition_S(gk_head);     // (8,1),G2S_ValTile_BN,G2S_ValTile_BK,BKNum,bn_num
-    auto g2s_dst_k = g2s_k.partition_D(sk);          // (8,1),G2S_ValTile_BN,G2S_ValTile_BK,BKNum
+    auto g2s_src_k = g2s_k.partition_S(gk_head);     // (8,1),G2S_ValTile_BN,G2S_ValTile_BK,BKNum(1),bn_num
+    auto g2s_dst_k = g2s_k.partition_D(sk);          // (8,1),G2S_ValTile_BN,G2S_ValTile_BK,BKNum(1),pipe_num
 
     auto g2s_src_v = g2s_v.partition_S(gv_head);     // (8,1),G2S_ValTile_BN2,G2S_ValTile_BK2,BN2Num,BK2Num,bn_num
-    auto g2s_dst_v = g2s_v.partition_D(sv);          // (8,1),G2S_ValTile_BN2,G2S_ValTile_BK2,BN2Num,BK2Num,
+    auto g2s_dst_v = g2s_v.partition_D(sv);          // (8,1),G2S_ValTile_BN2,G2S_ValTile_BK2,BN2Num,BK2Num,pipe_num
 
-    auto IssueG2SK = [&](int bn){
-        auto g2s_src_k_view = g2s_src_k(_,_,_,_,bn); 
-        for_each(make_int_sequence<BKNum{}>{},[&](auto bk){
-            // Do pileines along BK
-            copy(tiled_g2s_k,g2s_src_k_view(_,_,_,bk),g2s_dst_k(_,_,_,bk));
-            cp_async_fence();
-        });
-    };
-
-    auto IssueG2SV = [&](int bn){
-        auto g2s_src_v_view = g2s_src_v(_,_,_,_,_,bn); 
-        for_each(make_int_sequence<BK2Num{}>{},[&](auto bk2){
-            // Do pileines along BK2
-            copy(tiled_g2s_v,g2s_src_v_view(_,_,_,_,bk2),g2s_dst_v(_,_,_,_,bk2));
-            cp_async_fence();
-        });
-    };
 
     // Reg Q,K,V
     auto rq = make_tensor<T>(typename CFG::RShapeQ{});   // (2,2,2),QKMMA_ValTile_BM,2
@@ -134,16 +121,15 @@ __global__ void AttentionV1Kernel(const T* q,const T* k,const T* v,T* o,
     auto rp = make_tensor<T>(typename CFG::RShapeP{});
 
     // S2R Q,K,V
-    auto s2r_src_q_bks  = s2r_q.partition_S(sq);         // (8,1),S2R_ValTile_BM,S2R_ValTile_BK,BKNum
-    auto s2r_dst_q      = s2r_q.retile_D(rq);            // (8,1),S2R_ValTile_BM,2
+    auto s2r_src_q  = s2r_q.partition_S(sq);         // (8,1),S2R_ValTile_BM,S2R_ValTile_BK,BKNum
+    auto s2r_dst_q  = s2r_q.retile_D(rq);            // (8,1),S2R_ValTile_BM,2
 
-    auto s2r_src_k_bks  = s2r_k.partition_S(sk);         // (8,1),S2R_ValTile_BN,S2R_ValTile_BK,BKNum
-    auto s2r_dst_k      = s2r_k.retile_D(rk);            // (8,1),S2R_ValTile_BN,2
+    auto s2r_src_k  = s2r_k.partition_S(sk);         // (8,1),S2R_ValTile_BN,S2R_ValTile_BK,BKNum,PipeNum
+    auto s2r_dst_k  = s2r_k.retile_D(rk);            // (8,1),S2R_ValTile_BN,2
 
-    auto s2r_src_v_bn2bk2s = s2r_v.partition_S(sv);      // (8,1),(S2R_ValTile_BN2),S2R_ValTile_BK2,BN2Num,BK2Num
-    auto s2r_dst_v         = s2r_v.retile_D(rv);         // (8,1),(S2R_ValTile_BN2),2
-
-
+    auto s2r_src_v  = s2r_v.partition_S(sv);         // (8,1),(S2R_ValTile_BN2),S2R_ValTile_BK2,BN2Num,BK2Num,PipeNum
+    auto s2r_dst_v  = s2r_v.retile_D(rv);   
+    
     // Reg HO
     auto rho = make_tensor<T>(typename CFG::RShapeO{});
     // R2S
@@ -154,29 +140,29 @@ __global__ void AttentionV1Kernel(const T* q,const T* k,const T* v,T* o,
     auto s2g_src_ho = s2g_o.partition_S(so);            // (8,1),S2G_ValeTile_BM,S2G_ValeTile_BN2,BN2Num
     auto s2g_dst_ho = s2g_o.partition_D(go_block);      // ~
 
-
     // Reg accumulators
     auto rfx = make_tensor<float>(typename CFG::RShapeX{});     //(2,2), QKMMA_ValTile_BM,QKMMA_ValTile_BN
     auto rfo = make_tensor<float>(typename CFG::RShapeO{});     //(2,2), PVMMA_ValTile_BM,PVMMA_ValTile_BN2,BN2Num
 
     // QKMMA
-    auto QK_MMA = [&](int bk){
+    auto QK_MMA = [&](int pipe){
+        
         // Double buffer
         int ld_id = 0;
         int st_id = 0;
 
-        auto s2r_src_q = s2r_src_q_bks(_,_,_,bk);
-        auto s2r_src_k = s2r_src_k_bks(_,_,_,bk);
+        auto s2r_src_q_view = s2r_src_q(_,_,_,_0{});
+        auto s2r_src_k_view = s2r_src_k(_,_,_,_0{},pipe);
 
         // Prefetch for 1st mma
-        copy(tiled_s2r_q,s2r_src_q(_,_,0),s2r_dst_q(_,_,st_id));
-        copy(tiled_s2r_k,s2r_src_k(_,_,0),s2r_dst_k(_,_,st_id));
+        copy(tiled_s2r_q,s2r_src_q_view(_,_,0),s2r_dst_q(_,_,st_id));
+        copy(tiled_s2r_k,s2r_src_k_view(_,_,0),s2r_dst_k(_,_,st_id));
         st_id ^= 1;
         for(int i=0; i<BKTiles{}; i++){
             if(i+1<BKTiles{}){
                 // Prefetch for next round
-                copy(tiled_s2r_q,s2r_src_q(_,_,i+1),s2r_dst_q(_,_,st_id));
-                copy(tiled_s2r_k,s2r_src_k(_,_,i+1),s2r_dst_k(_,_,st_id));
+                copy(tiled_s2r_q,s2r_src_q_view(_,_,i+1),s2r_dst_q(_,_,st_id));
+                copy(tiled_s2r_k,s2r_src_k_view(_,_,i+1),s2r_dst_k(_,_,st_id));
                 st_id ^= 1;
             }
 
@@ -185,65 +171,76 @@ __global__ void AttentionV1Kernel(const T* q,const T* k,const T* v,T* o,
         }
     };
 
-    auto PV_MMA = [&](int bk2){
+    auto PV_MMA = [&](int pipe){
         for(int j=0; j<BN2Num{}; j++){
             int st_id = 0;
-            int ld_id = 0;
-            auto s2r_src_v = s2r_src_v_bn2bk2s(_,_,_,j,bk2);    // (8,1),(S2R_ValTile_BN2),S2R_ValTile_BK2
-            copy(tiled_s2r_v,s2r_src_v(_,_,0),s2r_dst_v(_,_,st_id));
+            int ld_id = 0; // S2R_ValTile_BK2,BN2Num,BK2Num,PipeNum
+            auto s2r_src_v_view = s2r_src_v(_,_,_,j,_0{},pipe);            // (8,1),(S2R_ValTile_BN2),S2R_ValTile_BK2
+            copy(tiled_s2r_v,s2r_src_v_view(_,_,0),s2r_dst_v(_,_,st_id));
             st_id ^= 1;
 
             for(int i=0; i<BK2Tiles{}; i++){
                 if(i+1<BK2Tiles{}){
-                    copy(tiled_s2r_v,s2r_src_v(_,_,i+1),s2r_dst_v(_,_,st_id));
+                    copy(tiled_s2r_v,s2r_src_v_view(_,_,i+1),s2r_dst_v(_,_,st_id));
                     st_id ^= 1;
                 }
 
-                gemm(tiled_pv_mma,rfo(_,_,_,j),rp(_,_,bk2*BK2Tiles{}+i),rv(_,_,ld_id),rfo(_,_,_,j));
+                gemm(tiled_pv_mma,rfo(_,_,_,j),rp(_,_,i),rv(_,_,ld_id),rfo(_,_,_,j));
                 ld_id ^= 1;
             }
         }   
     };
 
-    
-    // Reg softmax params
-    auto r_prev_sum = make_tensor<float>(typename CFG::RShapeSM{});
-    auto r_prev_max = make_tensor<float>(typename CFG::RShapeSM{});
-    fill(r_prev_sum,0); 
-    fill(r_prev_max,-INFINITY); 
+  
 
     // Wait for SMem Q
     cp_async_wait<0>();
 
-    // Prefetch
-    IssueG2SK(0);
+    int g_stage=0;
+    int pipe_write=0;
+    for(int i=0; i<min(PipeNum{}-1,bn_num); i++){
+        copy(tiled_g2s_k,g2s_src_k(_,_,_,_0{},g_stage),g2s_dst_k(_,_,_,_0{},pipe_write));
+        copy(tiled_g2s_v,g2s_src_v(_,_,_,_,_0{},g_stage),g2s_dst_v(_,_,_,_,_0{},pipe_write));
+        cp_async_fence();
+        ++g_stage;
+        ++pipe_write;
+    }
+
+      // Reg softmax params
+    auto r_prev_sum = make_tensor<float>(typename CFG::RShapeSM{});
+    auto r_prev_max = make_tensor<float>(typename CFG::RShapeSM{});
+    fill(r_prev_sum,0); 
+    fill(r_prev_max,-INFINITY);     
+
+    int pipe_read=0;
     for(int bn=0; bn<bn_num; bn++){
-        clear(rfx);
-        IssueG2SV(bn);
-        // QK Gemm
-        for_each(make_index_sequence<BKNum{}>{},[&](auto i){
-            // Wait for K
-            cp_async_wait<BKNum{} + BK2Num{} - i - 1>();
-            __syncthreads();
-            QK_MMA(i);
-        });
-        // Prefetch K for next round
-        if(bn+1<bn_num){
-            IssueG2SK(bn+1);
+         if(g_stage<bn_num){
+            copy(tiled_g2s_k,g2s_src_k(_,_,_,_0{},g_stage),g2s_dst_k(_,_,_,_0{},pipe_write));
+            copy(tiled_g2s_v,g2s_src_v(_,_,_,_,_0{},g_stage),g2s_dst_v(_,_,_,_,_0{},pipe_write));
+            cp_async_fence();
+            ++g_stage;
+            ++pipe_write;
+            pipe_write = (pipe_write == PipeNum{}) ? 0 : pipe_write;    // Recycle
         }
+
+        // Wait for SMem Q,K
+        if constexpr(PipeNum{} == 2){
+            cp_async_wait<PipeNum{}-1>();
+        }else{
+            cp_async_wait<PipeNum{}-2>();
+        }
+        __syncthreads();
+
+        QK_MMA(pipe_read);
 
         auto rfxt = make_tensor<float>(typename CFG::RSizeX{});
         TransposeX(rfx,rfxt);
- 
         Update(rfxt,r_prev_sum,r_prev_max,rp,rfo,log2_scale);
 
-        // PV Gemm
-        for_each(make_index_sequence<BK2Num{}>{},[&](auto i){
-            // Wait for V
-            cp_async_wait<BKNum{} + BK2Num{} - i - 1>();
-            __syncthreads();
-            PV_MMA(i);
-        });
+        PV_MMA(pipe_read);
+        
+        ++pipe_read;
+        pipe_read = (pipe_read == PipeNum{}) ? 0 : pipe_read;    // Recycle
     }
 
     RescaleO(rfo,rho,r_prev_sum);
@@ -254,21 +251,15 @@ __global__ void AttentionV1Kernel(const T* q,const T* k,const T* v,T* o,
     // s2g 
     copy(tiled_s2g_o,s2g_src_ho,s2g_dst_ho);
 
-    // if(thread0()){
-    //     Print("r2s_src_ho:",r2s_src_ho);
-    //     Print("r2s_dst_ho:",r2s_dst_ho);
-
-    //     Print("s2g_src_ho:",s2g_src_ho);
-    //     Print("s2g_dst_ho:",s2g_dst_ho);
-    // }
 }
 
-void PrintAttentionV1Info(int HD){
+void PrintAttentionV2Info(int HD){
     if(HD == 64){
-        using CFG = typename AttentionV1ConfigTratis<64>::CFG;
+        using CFG = typename AttentionV2ConfigTratis<64>::CFG;
         CFG{}.print();
-    }if(HD == 128){
-        using CFG = typename AttentionV1ConfigTratis<128>::CFG;
+    }
+     if(HD == 128){
+        using CFG = typename AttentionV2ConfigTratis<128>::CFG;
         CFG{}.print();
     }
 }
@@ -280,8 +271,8 @@ static void Launch(const __half* q,const __half* k,const __half* v,__half* o,
                     int q_batch_stride,int kv_batch_stride,int o_batch_stride,
                     cudaStream_t stream){
     using T = __half;
-    using CFG = typename AttentionV1ConfigTratis<HD>::CFG;
-    auto func = AttentionV1Kernel<T,HD>;
+    using CFG = typename AttentionV2ConfigTratis<HD>::CFG;
+    auto func = AttentionV2Kernel<T,HD>;
     int BM = typename CFG::BM{};
     int threads = typename CFG::Threads{};
     int smem_bytes = CFG::SBytes;
@@ -300,7 +291,7 @@ static void Launch(const __half* q,const __half* k,const __half* v,__half* o,
 }
 
 
-void AttentionV1(const __half* q,const __half* k,const __half* v,__half* o,
+void AttentionV2(const __half* q,const __half* k,const __half* v,__half* o,
                 int batch,int head_num,int qo_seq_len,int kv_seq_len,int head_dim,float softmax_scale,
                 int q_batch_stride,int kv_batch_stride,int o_batch_stride,
                 cudaStream_t stream){
@@ -311,6 +302,7 @@ void AttentionV1(const __half* q,const __half* k,const __half* v,__half* o,
         Launch<128>(q,k,v,o,batch,head_num,qo_seq_len,kv_seq_len,head_dim,softmax_scale,q_batch_stride,kv_batch_stride,o_batch_stride,stream);
    }
 }
+
 
 
 }

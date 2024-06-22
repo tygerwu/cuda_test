@@ -696,3 +696,7 @@ playground
 vs_build*
 
 third_lib/*
+
+*.ptx 
+*.sass 
+log*

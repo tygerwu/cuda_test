@@ -11,6 +11,7 @@ using AttentionFunc =
                        int q_batch_stride,int kv_batch_stride,int o_batch_stride,
                        cudaStream_t stream)>;
 
+extern int32_t profile_loop;
 
 class AttentionBench : public ::testing::Test{
     using T = __half;
@@ -27,7 +28,7 @@ class AttentionBench : public ::testing::Test{
             auto hO = std::vector<T>(qo_size);
 
             int warms = 5;
-            for(int i=0; i<loops; i++){
+            for(int i=0; i<profile_loop; i++){
                 T *dQ,*dK,*dV,*dO;
                 CUDA_ERROR_CHECK(cudaMalloc(&dQ,qo_bytes));
                 CUDA_ERROR_CHECK(cudaMalloc(&dK,kv_bytes));
@@ -54,7 +55,7 @@ class AttentionBench : public ::testing::Test{
                 auto err = cudaGetLastError();
                 if(err != cudaSuccess){
                     printf("err = %d, str = %s\n",err,cudaGetErrorString(err));
-                    //EXPECT_EQ(0,1);
+                    EXPECT_EQ(0,1);
                 }
 
                 CUDA_ERROR_CHECK(cudaEventRecord(stop,stream));
@@ -77,6 +78,7 @@ class AttentionBench : public ::testing::Test{
 
                 CUDA_ERROR_CHECK(cudaStreamDestroy(stream));
             }
+            std::cout << "Average Time:" << Average(times) << std::endl;
         }
 
     private:
@@ -107,15 +109,23 @@ class AttentionBench : public ::testing::Test{
 
 TEST_F(AttentionBench,test){
     batch = 1;
-    head_num = 1;
-    head_dim = 64;
-    qo_seq_len = 512;
-    kv_seq_len = 512;
+    head_num = 2;
+    head_dim = 128;
+    qo_seq_len = 16384;
+    kv_seq_len = 16384;
     softmax_scale = 1;
     q_batch_stride = head_num * head_dim * qo_seq_len;
     kv_batch_stride = head_num * head_dim * kv_seq_len;
     o_batch_stride = q_batch_stride;
     loops = 1;
+    // Op::PrintAttentionV1Info(head_dim);
+    // Bench(Op::AttentionV1);
+
+    
     Op::PrintAttentionV1Info(head_dim);
+    Op::PrintAttentionV2Info(head_dim);
+    Bench(Op::AttentionV2);
+    Bench(Op::AttentionV1);
+    Bench(Op::AttentionV2);
     Bench(Op::AttentionV1);
 }

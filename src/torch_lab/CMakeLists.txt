@@ -22,4 +22,4 @@ target_link_libraries(torch_lab
     ${TORCH_LIBRARIES}
 )
 
-
+add_subdirectory(custom_op)
