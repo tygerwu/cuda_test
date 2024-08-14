@@ -109,10 +109,10 @@ class AttentionBench : public ::testing::Test{
 
 TEST_F(AttentionBench,test){
     batch = 1;
-    head_num = 2;
+    head_num = 24;
     head_dim = 128;
-    qo_seq_len = 16384;
-    kv_seq_len = 16384;
+    qo_seq_len = 115200;
+    kv_seq_len = 115200;
     softmax_scale = 1;
     q_batch_stride = head_num * head_dim * qo_seq_len;
     kv_batch_stride = head_num * head_dim * kv_seq_len;

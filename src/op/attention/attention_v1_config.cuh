@@ -126,11 +126,13 @@ struct AttentionV1Config{
         Print("BN:",BN{});
         Print("BK:",BK{});
         Print("BKNum:",BKNum{});
+        Print("BKTiles:",BKTiles{});
 
         Print("BN2:",BN2{});
         Print("BK2:",BK2{});
         Print("BN2Num:",BN2Num{});
         Print("BK2Num:",BK2Num{});
+        Print("BK2Tiles:",BK2Tiles{});
 
         Print("SMemBytes:",SBytes);
 
@@ -187,7 +189,7 @@ struct AttentionV1ConfigTratis<128>{
     static constexpr int TiledMMA_ThrTile_M = 1;
     static constexpr int TiledMMA_VaTile_M  = 2;       
     static constexpr int TiledMMA_VaTile_N  = 8;        // BN = N x 16
-    static constexpr int BKTileNum  = 8;                // BK = BKTileNum x 16
+    static constexpr int BKTileNum  = 2;                // BK = BKTileNum x 16
     static constexpr int BK2TileNum = 8;
     static constexpr int BN2Size = 128;
 

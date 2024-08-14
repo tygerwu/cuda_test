@@ -150,6 +150,12 @@ __global__ void AttentionV1Kernel(const T* q,const T* k,const T* v,T* o,
     //  s2r_tile_mn : (PVMMA_M,PVMMA_N), ex:64x16
     auto r2s_src_ho = group_diff<1,0>(flatten(r2s_o.retile_S(rho)));   // ((2),S2RAtom_ValTile_PVMMA_M,S2RAtom_ValTile_PVMMA_N,S2R_ValTile_BM,S2R_ValTile_BN2,BN2Num
     auto r2s_dst_ho = group_diff<1,0>(flatten(r2s_o.partition_D(so))); // ~
+
+    // if(thread0()){
+    //     Print("r2s_src_ho:",r2s_src_ho);
+    //     Print("r2s_dst_ho:",r2s_dst_ho);
+    // }
+
     // S2G
     auto s2g_src_ho = s2g_o.partition_S(so);            // (8,1),S2G_ValeTile_BM,S2G_ValeTile_BN2,BN2Num
     auto s2g_dst_ho = s2g_o.partition_D(go_block);      // ~
@@ -185,17 +191,22 @@ __global__ void AttentionV1Kernel(const T* q,const T* k,const T* v,T* o,
         }
     };
 
+    // if(thread0()){
+    //     Print("rp:",rp);
+    // }
+
     auto PV_MMA = [&](int bk2){
         for(int j=0; j<BN2Num{}; j++){
             int st_id = 0;
             int ld_id = 0;
+
             auto s2r_src_v = s2r_src_v_bn2bk2s(_,_,_,j,bk2);    // (8,1),(S2R_ValTile_BN2),S2R_ValTile_BK2
             copy(tiled_s2r_v,s2r_src_v(_,_,0),s2r_dst_v(_,_,st_id));
             st_id ^= 1;
 
             for(int i=0; i<BK2Tiles{}; i++){
                 if(i+1<BK2Tiles{}){
-                    copy(tiled_s2r_v,s2r_src_v(_,_,i+1),s2r_dst_v(_,_,st_id));
+                    copy(tiled_s2r_v,s2r_src_v(_,_,i),s2r_dst_v(_,_,st_id));
                     st_id ^= 1;
                 }
 

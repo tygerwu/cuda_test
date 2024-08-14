@@ -206,7 +206,7 @@ __global__ void AttentionV2Kernel(const T* q,const T* k,const T* v,T* o,
         ++pipe_write;
     }
 
-      // Reg softmax params
+    // Reg softmax params
     auto r_prev_sum = make_tensor<float>(typename CFG::RShapeSM{});
     auto r_prev_max = make_tensor<float>(typename CFG::RShapeSM{});
     fill(r_prev_sum,0); 
